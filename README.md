@@ -1,248 +1,251 @@
-# CSM - Optimized Streaming/Finetuning Edition
+# Voice Cloning with CSM-1B
 
----
+This repository contains tools to clone your voice using the Sesame CSM-1B model. It provides two methods for voice cloning:
 
-CSM (Conversational Speech Model) is a speech generation model from [Sesame](https://www.sesame.com) that generates RVQ audio codes from text and audio inputs. The model architecture employs a [Llama](https://www.llama.com/) backbone and a smaller audio decoder that produces [Mimi](https://huggingface.co/kyutai/mimi) audio codes.
+1. Local execution on your own GPU
+2. Cloud execution using Modal
 
-Our fork adds **streaming audio generation**, **real-time playback**, and **performance optimizations** to the original implementation.
+> **Note:** While this solution does capture some voice characteristics and provides a recognizable clone, it's not the best voice cloning solution available. The results are decent but not perfect. If you have ideas on how to improve the cloning quality, feel free to contribute!
 
-## Requirements
+## Prerequisites
 
-* A CUDA-compatible GPU
-* The code has been tested on CUDA 12.4 and 12.6, but it may also work on other versions
-* Similarly, Python 3.10 is recommended, but newer versions may be fine
-* For some audio operations, `ffmpeg` may be required
-* For real-time audio playback: `pip install sounddevice`
-* Access to the following Hugging Face models:
-  * [Llama-3.2-1B](https://huggingface.co/meta-llama/Llama-3.2-1B)
-  * [CSM-1B](https://huggingface.co/sesame/csm-1b)
+- Python 3.10+
+- CUDA-compatible GPU (for local execution)
+- Hugging Face account with access to the CSM-1B model
+- Hugging Face API token
 
-### Setup
+## Installation
+
+1. Clone this repository:
 
 ```bash
-sudo apt-get update && sudo apt-get install -y libportaudio2 libportaudio-dev
-git clone git@github.com:davidbrowne17/csm-streaming.git
-cd csm-streaming
-python3.10 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
-# Optional speedup
-pip install flash-attn
-# You will need access to CSM-1B and Llama-3.2-1B
-huggingface-cli login
+git clone https://github.com/isaiahbjork/csm-voice-cloning.git
+cd csm-voice-cloning
 ```
 
-### Windows Setup
+## Jetson Setup (ARM64 / aarch64)
 
-The `triton` package cannot be installed in Windows. Instead use `pip install triton-windows`.
-The realtime demo uses VLLM for inference speed. This is currently not supported for windows but you can try with https://github.com/SystemPanic/vllm-windows until support is added.
+Running CSM-1B locally on a Jetson requires ARM-built wheels for PyTorch and its audio / quantization companions.
+Follow the steps below **exactly**—mixing wheel versions or JetPack releases will almost always end in cryptic "illegal instruction" or CUDA mismatch errors.
 
-## Quickstart
-
-Generate a sentence with streaming (chunks are processed and output as they're generated):
-
-```python
-import time
-from huggingface_hub import hf_hub_download
-from generator import Generator, Segment, load_csm_1b, generate_streaming_audio
-import torchaudio
-
-# Load the model
-generator = load_csm_1b("cuda")
-
-# Generate audio with streaming and real-time playback
-generate_streaming_audio(
-    generator=generator,
-    text="Hello, this is streaming audio generation in action!",
-    speaker=0,
-    context=[],  # No context needed for basic generation
-    output_file="streaming_audio.wav",
-    play_audio=True  # Enable real-time playback
-)
-```
-## Finetuning
-To finetune CSM all you need are some wav audio files with the speaker voice you want to train, just the raw wavs. Place them in a folder called audio_data and run lora.py.
-You can configure the exact training params such as batch size, number of epochs and learning rate by modifying the values at the top of lora.py.
-You will need a CUDA gpu with at least 12gb of vram depending on your dataset size and training params. You can monitor the training metrics via the dynamic png created in /finetuned_model/ folder. This contains various graphs to help you track the training progress. If you want to try a checkpoint you can use the loadandmergecheckpoint.py (make sure to set the same R and Alpha values as you used in the training)
-
-## Realtime chat demo
-To use the realtime demo run the setup.py to download the required models, and then run main.py. This will open up a setup page at http://localhost:8000 in which you can set the paths for your chosen LLM and setup the CSM paths and reference audio as well as select your headset and mic. When loaded you will be able to chat in realtime with the AI just like the CSM demo. Our demo includes a dynamic RAG system so the AI can remember previous conversations. The demo by default uses whisper-large-v3-turbo for STT and includes Automatic Voice Detection using Silero VAD.
-
-## Usage
-
-Our optimized version offers several ways to use CSM with streaming capabilities:
-
-### 1. Basic Streaming Generation
-
-Generate audio with streaming and save to a file:
-
-```python
-from generator import load_csm_1b, generate_streaming_audio
-
-generator = load_csm_1b("cuda")
-
-# Generate with streaming (writes to file as it generates)
-generate_streaming_audio(
-    generator=generator,
-    text="This audio will be generated in chunks for faster response times.",
-    speaker=0,
-    context=[],
-    output_file="streaming_output.wav"
-)
-```
-
-### 2. Real-time Audio Playback
-
-Generate and play audio in real-time as it's being generated:
-
-```python
-from generator import load_csm_1b, generate_streaming_audio
-
-generator = load_csm_1b("cuda")
-
-# Generate with streaming and play in real-time
-generate_streaming_audio(
-    generator=generator,
-    text="You'll hear me speaking as I'm being generated!",
-    speaker=0,
-    context=[],
-    output_file="streaming_output.wav",
-    play_audio=True  # Enable real-time playback
-)
-```
-
-### 3. Low-level Streaming API
-
-For more control, use the low-level streaming API:
-
-```python
-from generator import load_csm_1b, Segment
-import torchaudio
-
-generator = load_csm_1b("cuda")
-
-# Process audio chunks as they're generated
-for audio_chunk in generator.generate_stream(
-    text="This is generated chunk by chunk.",
-    speaker=0,
-    context=[]
-):
-    # Do something with each chunk as it's generated
-    print(f"Received chunk of size: {audio_chunk.shape}")
-    
-    # You could process or play each chunk here
-    # For example, write to a file incrementally
-    # Or send over a network connection
-```
-
-### 4. Generate with Context
-
-For best results, provide reference audio context:
-
-```python
-from generator import load_csm_1b, Segment, generate_streaming_audio
-import torchaudio
-
-generator = load_csm_1b("cuda")
-
-# Load reference audio
-def load_audio(audio_path):
-    audio_tensor, sample_rate = torchaudio.load(audio_path)
-    audio_tensor = torchaudio.functional.resample(
-        audio_tensor.squeeze(0), orig_freq=sample_rate, new_freq=generator.sample_rate
-    )
-    return audio_tensor
-
-# Create context segments
-segments = [
-    Segment(
-        text="I knew I could trust you.",
-        speaker=0,
-        audio=load_audio("reference.wav")
-    )
-]
-
-# Generate with streaming using the context
-generate_streaming_audio(
-    generator=generator,
-    text="Me too, this is some cool stuff huh?",
-    speaker=0,
-    context=segments,
-    output_file="contextual_streaming.wav",
-    play_audio=True
-)
-```
-
-### 5. Regular Generation with Internal Streaming
-
-Use the original API with streaming enabled internally:
-
-```python
-from generator import load_csm_1b, Segment
-import torchaudio
-
-generator = load_csm_1b("cuda")
-
-# Regular generation but with internal streaming optimization
-audio = generator.generate(
-    text="This uses internal streaming for faster processing.",
-    speaker=0,
-    context=[],
-    max_audio_length_ms=10_000,
-    stream=True  # Enable internal streaming optimization
-)
-
-torchaudio.save("audio.wav", audio.unsqueeze(0).cpu(), generator.sample_rate)
-```
-## Performance Optimizations
-
-Our optimized version includes several performance enhancements:
-
-- **Streaming Generation**: Processes and outputs audio in chunks instead of waiting for the entire generation achieving a Real-time factor (RTF): 0.28x (target: <1.0) on a 4090 (10 seconds of audio takes 2.8 seconds to generate)
-- **Frame Batching**: Processes multiple frames at once for better GPU utilization
-- **Half-precision Inference**: Uses bfloat16/float16 for faster processing
-- **CUDA Optimizations**: Enables cuDNN benchmarking and Flash Attention where available
-- **Memory Management**: Clears GPU cache before generation to reduce memory pressure
-
-## FAQ
-
-**How much faster is the streaming version?**
-
-The perceived response time is significantly faster since you get the first audio chunks in milliseconds instead of waiting for the entire generation to complete. The actual total generation time is also improved by 40-60% depending on your hardware.
-
-**Does this model come with any voices?**
-
-The model is a base generation model capable of producing a variety of voices but hasn't been fine-tuned on any specific voice. Provide reference audio for best results.
-
-**Can I converse with the model?**
-
-CSM is trained to be an audio generation model and not a general-purpose multimodal LLM. It cannot generate text. Using a seperate LLM you can converse with the realtime demo via the web ui.
-
-**Does it support other languages?**
-
-The model has some capacity for non-English languages due to data contamination in the training data, but it likely won't do well.
-
-## Misuse and abuse ⚠️
-
-This project provides a high-quality speech generation model for research and educational purposes. While we encourage responsible and ethical use, we **explicitly prohibit** the following:
-
-- **Impersonation or Fraud**: Do not use this model to generate speech that mimics real individuals without their explicit consent.
-- **Misinformation or Deception**: Do not use this model to create deceptive or misleading content, such as fake news or fraudulent calls.
-- **Illegal or Harmful Activities**: Do not use this model for any illegal, harmful, or malicious purposes.
-
-By using this model, you agree to comply with all applicable laws and ethical guidelines. We are **not responsible** for any misuse, and we strongly condemn unethical applications of this technology.
+> **Compatible JetPack**: These wheels were built against **JetPack 6.2 (CUDA 12.6)**.
+> If you are still on JetPack 5 or earlier, upgrade first.
+> **Python version**: The instructions assume you are using the system Python 3.10 that ships with JetPack 6.2 (the default `/usr/bin/python3`). If you switch to a different Python installation, be sure it is also **3.10** so the `cp310` wheels below can load.
 
 ---
 
-## Original Authors
-Johan Schalkwyk, Ankit Kumar, Dan Lyth, Sefik Emre Eskimez, Zack Hodari, Cinjon Resnick, Ramon Sanabria, Raven Jiang, and the Sesame team.
+### 1 ‒ Install cuSPARSE Lt library
 
-## Streaming, Realtime Demo and Finetuning Implementation
-David Browne
+PyTorch requires the cuSPARSE Lt (Light) library which is not included in JetPack 6.2 by default. Install it first:
 
-## Support me
-Support this project on Ko-fi: https://ko-fi.com/davidbrowne17
+```bash
+# Add NVIDIA's CUDA repository GPG key
+wget -qO - https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/sbsa/3bf863cc.pub | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-cuda-archive-keyring.gpg
 
-## Transformers streaming
-If you want to use streaming with the Transformers implementation you can find it here: https://github.com/davidbrowne17/csm-streaming-tf
+# Add NVIDIA's CUDA repository for ARM64
+echo "deb [signed-by=/usr/share/keyrings/nvidia-cuda-archive-keyring.gpg] https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/sbsa/ /" | sudo tee /etc/apt/sources.list.d/cuda-ubuntu2204-sbsa.list
+
+# Update package list and install cuSPARSE Lt
+sudo apt update
+sudo apt install libcusparselt0 libcusparselt-dev
+```
+
+---
+
+### 2 ‒ Install NVIDIA's Jetson-optimised PyTorch
+
+NVIDIA publishes a single wheel that matches each JetPack release. Download or copy it to your Jetson and install with `pip`:
+
+```bash
+# Example for JetPack 6.2 ‒ adjust the filename for your release
+pip install https://developer.download.nvidia.com/compute/redist/jp/v61/pytorch/torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarch64.whl
+```
+
+_(If the file lives elsewhere, just point to the correct path.)_
+
+---
+
+### 3 ‒ Download and install the custom wheels
+
+Download each wheel manually from the release page, then install them:
+
+1. Visit the release page: [https://github.com/onlykit-ar/csm-voice-cloning/releases/tag/jetson-csm](https://github.com/onlykit-ar/csm-voice-cloning/releases/tag/jetson-csm)
+
+2. Download the following wheels by clicking on each link:
+
+   - [torchao-0.9.0+git14cfbc74-cp310-abi3-linux_aarch64.whl](https://github.com/onlykit-ar/csm-voice-cloning/releases/download/jetson-csm/torchao-0.9.0+git14cfbc74-cp310-abi3-linux_aarch64.whl)
+   - [torchaudio-2.5.0-cp310-cp310-linux_aarch64.whl](https://github.com/onlykit-ar/csm-voice-cloning/releases/download/jetson-csm/torchaudio-2.5.0-cp310-cp310-linux_aarch64.whl)
+   - [torchtune-0.0.0-py3-none-any.whl](https://github.com/onlykit-ar/csm-voice-cloning/releases/download/jetson-csm/torchtune-0.0.0-py3-none-any.whl)
+
+3. Copy the downloaded wheels to your Jetson (if downloading from another machine) and install them:
+
+```bash
+# Install torchao (quantization/optimization helpers)
+pip install torchao-0.9.0+git14cfbc74-cp310-abi3-linux_aarch64.whl
+
+# Install torchaudio (audio I/O for PyTorch)
+pip install torchaudio-2.5.0-cp310-cp310-linux_aarch64.whl
+
+# Install torchtune (needed to load CSM checkpoints & configs)
+pip install torchtune-0.0.0-py3-none-any.whl
+```
+
+---
+
+### 4 ‒ Install additional dependencies
+
+Install the remaining Python dependencies using the constraints file to preserve your PyTorch installation:
+
+```bash
+# Install remaining dependencies with constraints to protect PyTorch versions
+pip install -r requirements.txt --constraint constraints.txt
+```
+
+> **Important**: Always use the constraints file when installing Python packages on Jetson to prevent downgrading your carefully installed PyTorch ecosystem.
+
+---
+
+### 5 ‒ Verify the installation
+
+Run a quick import test:
+
+```bash
+python - <<'PY'
+import torch, torchaudio, torchao, torchtune
+import silentcipher, moshi
+print("✅  PyTorch:", torch.__version__)
+print("✅  TorchAudio:", torchaudio.__version__)
+print("✅  TorchAO imported OK")
+print("✅  TorchTune imported OK")
+print("✅  SilentCipher imported OK")
+print("✅  Moshi imported OK")
+print("✅  CUDA available:", torch.cuda.is_available())
+PY
+```
+
+If every line prints successfully, your Jetson environment is ready for **Voice Cloning with CSM-1B**.
+
+> **Note**: These wheels are specifically built for Jetson platforms with CUDA 12.6 support. Update the paths above to point to your actual wheel locations.
+
+## Setting Up Your Hugging Face Token
+
+You need to set your Hugging Face token to download the model. You can do this in two ways:
+
+1. Set it as an environment variable:
+
+```bash
+export HF_TOKEN="your_hugging_face_token"
+```
+
+2. Or directly in the `voice_clone.py` file:
+
+```python
+os.environ["HF_TOKEN"] = "your_hugging_face_token"
+```
+
+## Accepting the Model on Hugging Face
+
+Before using the model, you need to accept the terms on Hugging Face:
+
+1. Visit the [Sesame CSM-1B model page](https://huggingface.co/sesame/csm-1b)
+2. Click on "Access repository" and accept the terms
+3. Make sure you're logged in with the same account that your HF_TOKEN belongs to
+
+## Preparing Your Voice Sample
+
+1. Record a clear audio sample of your voice (2-3 minutes is recommended)
+2. Save it as an MP3 or WAV file
+3. Transcribe the audio using Whisper or another transcription tool to get the exact text
+
+## Running Voice Cloning Locally
+
+1. Edit the `voice_clone.py` file to set your parameters directly in the code:
+
+```python
+# Set the path to your voice sample
+context_audio_path = "path/to/your/voice/sample.mp3"
+
+# Set the transcription of your voice sample
+# You need to use Whisper or another tool to transcribe your audio
+context_text = "The exact transcription of your voice sample..."
+
+# Set the text you want to synthesize
+text = "Text you want to synthesize with your voice."
+
+# Set the output filename
+output_filename = "output.wav"
+```
+
+2. Run the script:
+
+```bash
+python voice_clone.py
+```
+
+## Running Voice Cloning on Modal
+
+Modal provides cloud GPU resources for faster processing:
+
+1. Install Modal:
+
+```bash
+pip install modal
+```
+
+2. Set up Modal authentication:
+
+```bash
+modal token new
+```
+
+3. Edit the `modal_voice_cloning.py` file to set your parameters directly in the code:
+
+```python
+# Set the path to your voice sample
+context_audio_path = "path/to/your/voice/sample.mp3"
+
+# Set the transcription of your voice sample
+# You need to use Whisper or another tool to transcribe your audio
+context_text = "The exact transcription of your voice sample..."
+
+# Set the text you want to synthesize
+text = "Text you want to synthesize with your voice."
+
+# Set the output filename
+output_filename = "output.wav"
+```
+
+4. Run the Modal script:
+
+```bash
+modal run modal_voice_cloning.py
+```
+
+## Important Note on Model Sequence Length
+
+If you encounter tensor dimension errors, you may need to adjust the model's maximum sequence length in `models.py`. The default sequence length is 2048, which works for most cases, but if you're using longer audio samples, you might need to increase this value.
+
+Look for the `max_seq_len` parameter in the `llama3_2_1B()` and `llama3_2_100M()` functions in `models.py` and ensure they have the same value:
+
+```python
+def llama3_2_1B():
+    return llama3_2.llama3_2(
+        # other parameters...
+        max_seq_len=2048,  # Increase this value if needed
+        # other parameters...
+    )
+```
+
+## Example
+
+Using a 2 minute and 50 second audio sample works fine with the default settings. For longer samples, you may need to adjust the sequence length as mentioned above.
+
+## Troubleshooting
+
+- **Tensor dimension errors**: Adjust the model sequence length as described above
+- **CUDA out of memory**: Try reducing the audio sample length or use a GPU with more memory
+- **Model download issues**: Ensure you've accepted the model terms on Hugging Face and your token is correct
+
+## License
+
+This project uses the Sesame CSM-1B model, which is subject to its own license terms. Please refer to the [model page](https://huggingface.co/sesame/csm-1b) for details.
