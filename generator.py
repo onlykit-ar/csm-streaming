@@ -18,6 +18,25 @@ from tokenizers.processors import TemplateProcessing
 from transformers import AutoTokenizer
 import logging
 
+# Workaround for missing Triton on ARM64/Jetson platforms
+# This disables PyTorch compilation that requires Triton and falls back to eager execution
+try:
+    import torch._dynamo
+    torch._dynamo.config.suppress_errors = True
+    print("✅ Triton workaround applied: PyTorch compilation disabled for ARM64 compatibility")
+except ImportError:
+    print("⚠️  torch._dynamo not available, continuing without Triton workaround")
+
+
+# if jetson, patch torch.compile
+import platform
+
+if platform.machine() == "aarch64":  # Jetson/ARM64
+    torch.compile = lambda model, *args, **kwargs: model
+    print("⚠️  torch.compile() disabled on Jetson")
+
+os.environ["HF_TOKEN"] = "" # Need to set token here
+
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -32,7 +51,7 @@ def load_llama3_tokenizer():
     """
     https://github.com/huggingface/transformers/issues/22794#issuecomment-2092623992
     """
-    tokenizer_name = "unsloth/Llama-3.2-1B"
+    tokenizer_name = "meta-llama/Llama-3.2-1B"
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     bos = tokenizer.bos_token
     eos = tokenizer.eos_token
@@ -745,8 +764,30 @@ def load_csm_1b(device: str = "cuda") -> Generator:
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
-    
-    model = Model.from_pretrained("sesame/csm-1b")
+    try:
+        # Try to use local cache
+        model_path = hf_hub_download(
+            repo_id="sesame/csm-1b",
+            filename="ckpt.pt",
+            local_files_only=True  # will raise an error if not found
+    )
+    except Exception:
+        # Fallback: allow download if it's not cached
+        print("Model not found in cache — downloading...")
+        model_path = hf_hub_download(
+            repo_id="sesame/csm-1b",
+            filename="ckpt.pt"
+        )
+    model_args = ModelArgs(
+        backbone_flavor="llama-1B",
+        decoder_flavor="llama-100M",
+        text_vocab_size=128256,
+        audio_vocab_size=2051,
+        audio_num_codebooks=32,
+        )
+    model = Model(model_args).to(device=device, dtype=torch.bfloat16)
+    state_dict = torch.load(model_path, weights_only=True)
+    model.load_state_dict(state_dict)
     
     dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
     model.backbone = torch.compile(model.backbone,mode='reduce-overhead', fullgraph=True, backend='inductor')
